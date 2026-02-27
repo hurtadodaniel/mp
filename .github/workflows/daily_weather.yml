@@ -1,0 +1,39 @@
+name: Daily Weather Fetch
+
+on:
+  schedule:
+    # Runs every day at 09:00 UTC (adjust to your preferred time)
+    - cron: '0 9 * * *'
+  # Allows manual execution from the GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  fetch-data:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # needed to commit the CSV back to the repo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch weather data
+        run: python fetch_weather.py
+
+      - name: Commit and push updated CSV
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data/
+          # Only commit if there are changes
+          git diff --staged --quiet || git commit -m "chore: daily weather data $(date +'%Y-%m-%d')"
+          git push
