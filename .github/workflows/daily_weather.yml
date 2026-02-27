@@ -40,6 +40,9 @@ jobs:
       - name: Fetch órdenes de compra
         env:
           MP_TICKET: ${{ secrets.MP_TICKET }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
           FECHA_ARG=""
           ESTADO_ARG="todos"
@@ -55,10 +58,19 @@ jobs:
           python fetch_ordenes_compra.py $FECHA_ARG --estado $ESTADO_ARG
 
       - name: Commit and push updated CSV
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+          # Inject token into remote URL so push can authenticate
+          git remote set-url origin \
+            https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
           git add data/
-          # Only commit if there are changes
-          git diff --staged --quiet || git commit -m "chore: OC Mercado Público $(date +'%Y-%m-%d')"
-          git push
+          # Only commit and push if there are staged changes
+          if git diff --staged --quiet; then
+            echo "Sin cambios que guardar."
+          else
+            git commit -m "chore: OC Mercado Público $(date +'%Y-%m-%d %H:%M UTC')"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
