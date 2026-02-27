@@ -7,7 +7,7 @@ en el CSV consolidado), clasifica por categoría de producto, y guarda
 todo en CSVs incrementales dentro de data/.
 
 Uso:
-    python fetch_ordenes_compra.py [--fecha DDMMAAAA] [--estado todos]
+    python fetch_ordenes_compra.py [--fecha DDMMAAAA]
 
 Variables de entorno:
     MP_TICKET       – API ticket (requerido).
@@ -276,7 +276,7 @@ def _build_html_table(rows: list[dict], max_rows: int = 50) -> str:
     """
 
 
-def send_email(new_rows: list[dict], fecha_consulta: str, estado: str) -> None:
+def send_email(new_rows: list[dict], fecha_consulta: str) -> None:
     if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO]):
         print("  Correo no configurado — saltando envío de email.")
         return
@@ -284,7 +284,7 @@ def send_email(new_rows: list[dict], fecha_consulta: str, estado: str) -> None:
     recipients = [r.strip() for r in EMAIL_TO.split(",") if r.strip()]
     subject = (
         f"OC Mercado Público · {fecha_consulta} · "
-        f"{len(new_rows)} orden(es) nuevas · estado={estado}"
+        f"{len(new_rows)} orden(es) nuevas"
     )
 
     msg = MIMEMultipart("mixed")
@@ -294,7 +294,6 @@ def send_email(new_rows: list[dict], fecha_consulta: str, estado: str) -> None:
 
     plain = (
         f"Órdenes de Compra — {fecha_consulta}\n"
-        f"Estado: {estado}\n"
         f"Órdenes nuevas procesadas: {len(new_rows)}\n\n"
         "Ver adjunto para el detalle completo."
     )
@@ -302,7 +301,6 @@ def send_email(new_rows: list[dict], fecha_consulta: str, estado: str) -> None:
     <html><body>
       <h2 style="color:#1a56db">Mercado Público — Órdenes de Compra</h2>
       <p><b>Fecha:</b> {fecha_consulta} &nbsp;|&nbsp;
-         <b>Estado:</b> {estado} &nbsp;|&nbsp;
          <b>Nuevas:</b> {len(new_rows)} orden(es)</p>
       {_build_html_table(new_rows)}
       <p style="color:#aaa;font-size:11px">
@@ -327,7 +325,7 @@ def send_email(new_rows: list[dict], fecha_consulta: str, estado: str) -> None:
     attachment = MIMEBase("application", "octet-stream")
     attachment.set_payload(csv_bytes)
     encoders.encode_base64(attachment)
-    filename = f"ordenes_compra_{fecha_consulta}_{estado}.csv"
+    filename = f"ordenes_compra_{fecha_consulta}.csv"
     attachment.add_header("Content-Disposition", "attachment", filename=filename)
     msg.attach(attachment)
 
@@ -348,10 +346,6 @@ def main() -> None:
         "--fecha", default=None,
         help="Fecha en formato DDMMAAAA (default: hoy)",
     )
-    parser.add_argument(
-        "--estado", default="todos",
-        help="Filtro de estado: todos, aceptada, enviadaproveedor, etc.",
-    )
     args = parser.parse_args()
 
     fecha_extraccion = datetime.now()
@@ -359,7 +353,7 @@ def main() -> None:
     fecha_consulta = fecha_extraccion.strftime("%Y-%m-%d")
 
     print(f"Fecha de extracción: {fecha_extraccion.strftime('%d-%m-%Y')}")
-    print(f"Parámetro API: fecha={fecha_str}, estado={args.estado}")
+    print(f"Parámetro API: fecha={fecha_str}")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -611,7 +605,7 @@ def main() -> None:
         new_rows = df_detalles[
             df_detalles["Codigo"].astype(str).isin(todos_codigos)
         ].to_dict("records") if todos_codigos else []
-        send_email(new_rows, fecha_consulta, args.estado)
+        send_email(new_rows, fecha_consulta)
 
     ahora = datetime.now()
     print(f"\nPipeline completado — {ahora.strftime('%d/%m/%Y %H:%M:%S')}")

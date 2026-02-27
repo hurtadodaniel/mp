@@ -13,10 +13,6 @@ on:
         description: 'Fecha en formato DDMMAAAA (default: hoy)'
         required: false
         default: ''
-      estado:
-        description: 'Estado de la OC (todos, aceptada, enviadaproveedor, ...)'
-        required: false
-        default: 'todos'
 
 jobs:
   fetch-data:
@@ -46,17 +42,13 @@ jobs:
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
           FECHA_ARG=""
-          ESTADO_ARG="todos"
 
-          # If triggered manually with inputs, use them
+          # If triggered manually with a date input, use it
           if [ -n "${{ github.event.inputs.fecha }}" ]; then
             FECHA_ARG="--fecha ${{ github.event.inputs.fecha }}"
           fi
-          if [ -n "${{ github.event.inputs.estado }}" ]; then
-            ESTADO_ARG="${{ github.event.inputs.estado }}"
-          fi
 
-          python fetch_ordenes_compra.py $FECHA_ARG --estado $ESTADO_ARG
+          python fetch_ordenes_compra.py $FECHA_ARG
 
       - name: Commit and push updated CSVs
         env:
