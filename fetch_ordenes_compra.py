@@ -355,9 +355,8 @@ def main() -> None:
     args = parser.parse_args()
 
     fecha_extraccion = datetime.now()
-    ayer = fecha_extraccion - timedelta(days=1)
-    fecha_str = args.fecha or ayer.strftime("%d%m%Y")
-    fecha_consulta = ayer.strftime("%Y-%m-%d")
+    fecha_str = args.fecha or fecha_extraccion.strftime("%d%m%Y")
+    fecha_consulta = fecha_extraccion.strftime("%Y-%m-%d")
 
     print(f"Fecha de extracción: {fecha_extraccion.strftime('%d-%m-%Y')}")
     print(f"Parámetro API: fecha={fecha_str}, estado={args.estado}")
