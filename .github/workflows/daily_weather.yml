@@ -1,11 +1,20 @@
-name: Daily Weather Fetch
+name: Daily OC Fetch — Mercado Público
 
 on:
   schedule:
-    # Runs every day at 09:00 UTC (adjust to your preferred time)
-    - cron: '0 9 * * *'
+    # Runs every day at 08:00 UTC (05:00 Chile continental)
+    - cron: '0 8 * * *'
   # Allows manual execution from the GitHub Actions tab
   workflow_dispatch:
+    inputs:
+      fecha:
+        description: 'Fecha en formato DDMMAAAA (default: hoy)'
+        required: false
+        default: ''
+      estado:
+        description: 'Estado de la OC (todos, aceptada, enviadaproveedor, ...)'
+        required: false
+        default: 'todos'
 
 jobs:
   fetch-data:
@@ -26,8 +35,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Fetch weather data
-        run: python fetch_weather.py
+      - name: Fetch órdenes de compra
+        env:
+          MP_TICKET: ${{ secrets.MP_TICKET }}
+        run: |
+          FECHA_ARG=""
+          ESTADO_ARG="todos"
+
+          # If triggered manually with inputs, use them
+          if [ -n "${{ github.event.inputs.fecha }}" ]; then
+            FECHA_ARG="--fecha ${{ github.event.inputs.fecha }}"
+          fi
+          if [ -n "${{ github.event.inputs.estado }}" ]; then
+            ESTADO_ARG="${{ github.event.inputs.estado }}"
+          fi
+
+          python fetch_ordenes_compra.py $FECHA_ARG --estado $ESTADO_ARG
 
       - name: Commit and push updated CSV
         run: |
@@ -35,5 +58,5 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add data/
           # Only commit if there are changes
-          git diff --staged --quiet || git commit -m "chore: daily weather data $(date +'%Y-%m-%d')"
+          git diff --staged --quiet || git commit -m "chore: OC Mercado Público $(date +'%Y-%m-%d')"
           git push
