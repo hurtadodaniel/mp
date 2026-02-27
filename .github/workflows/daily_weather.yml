@@ -2,8 +2,10 @@ name: Daily OC Fetch — Mercado Público
 
 on:
   schedule:
-    # Runs every day at 08:00 UTC (05:00 Chile continental)
-    - cron: '0 8 * * *'
+    # Chile verano = UTC-3. Horarios locales → UTC:
+    - cron: '0 12 * * *'   # 09:00 Chile
+    - cron: '0 14 * * *'   # 11:00 Chile
+    - cron: '0 16 * * *'   # 13:00 Chile (1 PM)
   # Allows manual execution from the GitHub Actions tab
   workflow_dispatch:
     inputs:
