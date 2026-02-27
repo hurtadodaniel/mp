@@ -67,7 +67,10 @@ jobs:
           # Inject token into remote URL so push can authenticate
           git remote set-url origin \
             https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
-          git add data/
+          # Only add data/ if it exists (no orders = no directory)
+          if [ -d data ]; then
+            git add data/
+          fi
           # Only commit and push if there are staged changes
           if git diff --staged --quiet; then
             echo "Sin cambios que guardar."
