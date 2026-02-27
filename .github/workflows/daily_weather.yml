@@ -21,6 +21,7 @@ on:
 jobs:
   fetch-data:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     permissions:
       contents: write  # needed to commit the CSV back to the repo
@@ -37,7 +38,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Fetch órdenes de compra
+      - name: Fetch órdenes de compra (incremental)
         env:
           MP_TICKET: ${{ secrets.MP_TICKET }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
@@ -57,7 +58,7 @@ jobs:
 
           python fetch_ordenes_compra.py $FECHA_ARG --estado $ESTADO_ARG
 
-      - name: Commit and push updated CSV
+      - name: Commit and push updated CSVs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
