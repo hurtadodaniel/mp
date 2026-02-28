@@ -27,6 +27,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -349,7 +350,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    fecha_extraccion = datetime.now()
+    fecha_extraccion = datetime.now(ZoneInfo("America/Santiago"))
     fecha_str = args.fecha or fecha_extraccion.strftime("%d%m%Y")
     fecha_consulta = fecha_extraccion.strftime("%Y-%m-%d")
 
