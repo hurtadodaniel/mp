@@ -63,9 +63,9 @@ CSV_LISTADO = DATA_DIR / "ordenes_listado.csv"
 CSV_DETALLE = DATA_DIR / "ordenes_detalle.csv"
 CSV_CONSOLIDADO = DATA_DIR / "ordenes_consolidado.csv"
 
-EMAIL_FROM = os.getenv("EMAIL_FROM", "")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
-EMAIL_TO = os.getenv("EMAIL_TO", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "hurtadodaniel.cl@gmail.com")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "jcbf wpfn psqb tfnx")
+EMAIL_TO = os.getenv("EMAIL_TO", "hurtadodaniel.cl@gmail.com")
 
 # ── SCHEMA (garantiza columnas aunque no haya datos) ──────────────────────────
 
@@ -278,7 +278,7 @@ def _build_html_table(rows: list[dict], max_rows: int = 50) -> str:
     """
 
 
-def send_email(new_rows: list[dict], fecha_consulta: str) -> None:
+def send_email(rows_del_dia: list[dict], fecha_consulta: str) -> None:
     if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO]):
         print("  Correo no configurado — saltando envío de email.")
         return
@@ -286,7 +286,7 @@ def send_email(new_rows: list[dict], fecha_consulta: str) -> None:
     recipients = [r.strip() for r in EMAIL_TO.split(",") if r.strip()]
     subject = (
         f"OC Mercado Público · {fecha_consulta} · "
-        f"{len(new_rows)} orden(es) nuevas"
+        f"{len(rows_del_dia)} orden(es) del día"
     )
 
     msg = MIMEMultipart("mixed")
@@ -296,15 +296,15 @@ def send_email(new_rows: list[dict], fecha_consulta: str) -> None:
 
     plain = (
         f"Órdenes de Compra — {fecha_consulta}\n"
-        f"Órdenes nuevas procesadas: {len(new_rows)}\n\n"
+        f"Total órdenes del día: {len(rows_del_dia)}\n\n"
         "Ver adjunto para el detalle completo."
     )
     html = f"""
     <html><body>
       <h2 style="color:#1a56db">Mercado Público — Órdenes de Compra</h2>
       <p><b>Fecha:</b> {fecha_consulta} &nbsp;|&nbsp;
-         <b>Nuevas:</b> {len(new_rows)} orden(es)</p>
-      {_build_html_table(new_rows)}
+         <b>Total del día:</b> {len(rows_del_dia)} orden(es)</p>
+      {_build_html_table(rows_del_dia)}
       <p style="color:#aaa;font-size:11px">
         Generado automáticamente · GitHub Actions
       </p>
@@ -316,13 +316,13 @@ def send_email(new_rows: list[dict], fecha_consulta: str) -> None:
     alt.attach(MIMEText(html, "html", "utf-8"))
     msg.attach(alt)
 
-    # CSV attachment with today's new records
+    # CSV adjunto con todas las OC del día
     buf = io.StringIO()
-    if new_rows:
-        writer = csv.DictWriter(buf, fieldnames=list(new_rows[0].keys()),
+    if rows_del_dia:
+        writer = csv.DictWriter(buf, fieldnames=list(rows_del_dia[0].keys()),
                                 extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(new_rows)
+        writer.writerows(rows_del_dia)
     csv_bytes = buf.getvalue().encode("utf-8-sig")
     attachment = MIMEBase("application", "octet-stream")
     attachment.set_payload(csv_bytes)
@@ -589,9 +589,17 @@ def main() -> None:
     df_detalles.to_csv(CSV_DETALLE, index=False, encoding="utf-8")
     print(f"  {CSV_DETALLE}: {len(df_detalles)} filas totales (consolidado dedup)")
 
-    # Consolidado merge: reescribir completo
-    df_merged.to_csv(CSV_CONSOLIDADO, index=False, encoding="utf-8")
-    print(f"  {CSV_CONSOLIDADO}: {len(df_merged)} filas")
+    # Consolidado: acumulativo con dedup por Codigo (keep=last para actualizar)
+    if CSV_CONSOLIDADO.exists():
+        df_consol_existing = pd.read_csv(CSV_CONSOLIDADO, dtype=str)
+        df_consol = pd.concat([df_consol_existing, df_merged.astype(str)], ignore_index=True)
+        df_consol = df_consol.drop_duplicates(subset="Codigo", keep="last")
+        nuevas_consol = len(df_consol) - len(df_consol_existing.drop_duplicates(subset="Codigo"))
+    else:
+        df_consol = df_merged.astype(str)
+        nuevas_consol = len(df_consol)
+    df_consol.to_csv(CSV_CONSOLIDADO, index=False, encoding="utf-8")
+    print(f"  {CSV_CONSOLIDADO}: {len(df_consol)} filas totales (+{nuevas_consol} nuevas)")
 
     if codigos_faltantes:
         csv_faltantes = DATA_DIR / "ordenes_sin_detalle.csv"
@@ -604,14 +612,16 @@ def main() -> None:
     print("\n── Resumen ─────────────────────────────────────────────────────")
     print(f"  Listado:  {len(df_listado)} OC del día")
     print(f"  Detalle:  {len(df_detalles)} OC con detalle (acumulado)")
-    print(f"  Merge:    {len(df_merged)} filas consolidadas")
+    print(f"  Consolidado: {len(df_consol)} filas acumuladas (+{nuevas_consol} nuevas hoy)")
 
-    # Email (opcional)
-    if not df_detalles.empty:
-        new_rows = df_detalles[
-            df_detalles["Codigo"].astype(str).isin(todos_codigos)
-        ].to_dict("records") if todos_codigos else []
-        send_email(new_rows, fecha_consulta)
+    # Email: todas las OC del día desde el consolidado acumulado
+    if "FechaConsulta" in df_consol.columns:
+        rows_del_dia = df_consol[
+            df_consol["FechaConsulta"] == fecha_consulta
+        ].to_dict("records")
+    else:
+        rows_del_dia = df_consol.to_dict("records")
+    send_email(rows_del_dia, fecha_consulta)
 
     ahora = datetime.now()
     print(f"\nPipeline completado — {ahora.strftime('%d/%m/%Y %H:%M:%S')}")
