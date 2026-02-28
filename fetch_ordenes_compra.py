@@ -377,6 +377,8 @@ def main() -> None:
                 print(f"  {len(df_t)} órdenes cargadas.")
             else:
                 print(f"  Sin resultados para la fecha.")
+                # Mostrar respuesta completa para diagnóstico
+                print(f"  [DEBUG] Respuesta API: {data}")
         except Exception as e:
             print(f"  Error definitivo proveedor {proveedor}: {e}")
             errores_listado.append(proveedor)
