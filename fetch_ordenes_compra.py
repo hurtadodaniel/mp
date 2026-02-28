@@ -135,8 +135,9 @@ def _fetch_listado(proveedor, fecha, ticket, url, max_retries=MAX_RETRIES_LISTAD
             }, verify=False, timeout=25)
             if r.status_code in (500, 502, 503, 504):
                 wait = _wait_backoff(intento)
+                body = r.text[:300] if r.text else "(sin cuerpo)"
                 print(f"    HTTP {r.status_code} — intento {intento}/{max_retries}, "
-                      f"reintentando en {wait:.0f}s...")
+                      f"reintentando en {wait:.0f}s... | body: {body}")
                 last_error = f"HTTP {r.status_code}"
                 time.sleep(wait)
                 continue
