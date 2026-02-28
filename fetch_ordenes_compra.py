@@ -42,7 +42,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ── CONFIGURACIÓN ─────────────────────────────────────────────────────────────
 
-TICKET = os.getenv("MP_TICKET", "F8537A18-6766-4DEF-9E59-426B4FEE2844")
+TICKET = os.getenv("MP_TICKET") or "F8537A18-6766-4DEF-9E59-426B4FEE2844"
 LISTA_PROVEEDORES = ["27693"]
 
 URL_LISTADO = "https://api.mercadopublico.cl/servicios/v1/publico/ordenesdecompra.json"
@@ -352,8 +352,10 @@ def main() -> None:
     fecha_str = args.fecha or fecha_extraccion.strftime("%d%m%Y")
     fecha_consulta = fecha_extraccion.strftime("%Y-%m-%d")
 
+    ticket_source = "env MP_TICKET" if os.getenv("MP_TICKET") else "hardcoded"
     print(f"Fecha de extracción: {fecha_extraccion.strftime('%d-%m-%Y')}")
     print(f"Parámetro API: fecha={fecha_str}")
+    print(f"Ticket: {TICKET[:8]}...{TICKET[-4:]} (fuente: {ticket_source})")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
