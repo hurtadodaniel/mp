@@ -63,9 +63,9 @@ CSV_LISTADO = DATA_DIR / "ordenes_listado.csv"
 CSV_DETALLE = DATA_DIR / "ordenes_detalle.csv"
 CSV_CONSOLIDADO = DATA_DIR / "ordenes_consolidado.csv"
 
-EMAIL_FROM = os.getenv("EMAIL_FROM", "hurtadodaniel.cl@gmail.com")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "jcbf wpfn psqb tfnx")
-EMAIL_TO = os.getenv("EMAIL_TO", "hurtadodaniel.cl@gmail.com")
+EMAIL_FROM = os.getenv("EMAIL_FROM") or "hurtadodaniel.cl@gmail.com"
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD") or "jcbf wpfn psqb tfnx"
+EMAIL_TO = os.getenv("EMAIL_TO") or "hurtadodaniel.cl@gmail.com"
 
 # ── SCHEMA (garantiza columnas aunque no haya datos) ──────────────────────────
 
