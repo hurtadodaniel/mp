@@ -376,7 +376,7 @@ def main() -> None:
             if data.get("Listado"):
                 df_t = pd.DataFrame(data["Listado"])
                 df_t["CodigoProveedorConsultado"] = proveedor
-                df_t["FechaConsulta"] = fecha_str
+                df_t["FechaConsulta"] = fecha_consulta
                 resultados.append(df_t)
                 print(f"  {len(df_t)} órdenes cargadas.")
             else:
