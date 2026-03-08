@@ -45,6 +45,12 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+try:
     from google import genai as _genai_module
     _GENAI_AVAILABLE = True
 except ImportError:
@@ -79,7 +85,7 @@ EMAIL_TO = os.getenv("EMAIL_TO") or "hurtadodaniel.cl@gmail.com"
 # ── ALARMAS ───────────────────────────────────────────────────────────────────
 
 EMAIL_ALERTAS = os.getenv("EMAIL_ALERTAS") or EMAIL_FROM
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6K-k-J2-CXPkqK531ozeEDPjOs3l3gJ8WUe1nY1U1mRpg"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CLIENTES_PRIORITARIOS_PATH = DATA_DIR / "clientes_prioritarios.json"
 ALARMAS_PATH = DATA_DIR / "alarmas.csv"
 GESTIONES_PATH = DATA_DIR / "gestiones.csv"
