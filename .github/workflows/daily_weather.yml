@@ -49,6 +49,8 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Fetch órdenes de compra (incremental)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           FECHA_ARG=""
           if [ -n "${{ github.event.inputs.fecha }}" ]; then
@@ -98,4 +100,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Enviar resumen de alarmas (últimos 7 días)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python fetch_ordenes_compra.py --resumen

@@ -23,6 +23,7 @@ import io
 import json
 import os
 import random
+import re
 import smtplib
 import sys
 import time
@@ -42,6 +43,12 @@ import requests
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+try:
+    from google import genai as _genai_module
+    _GENAI_AVAILABLE = True
+except ImportError:
+    _GENAI_AVAILABLE = False
 
 # ── CONFIGURACIÓN ─────────────────────────────────────────────────────────────
 
@@ -72,13 +79,15 @@ EMAIL_TO = os.getenv("EMAIL_TO") or "hurtadodaniel.cl@gmail.com"
 # ── ALARMAS ───────────────────────────────────────────────────────────────────
 
 EMAIL_ALERTAS = os.getenv("EMAIL_ALERTAS") or EMAIL_FROM
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6K-k-J2-CXPkqK531ozeEDPjOs3l3gJ8WUe1nY1U1mRpg"
 CLIENTES_PRIORITARIOS_PATH = DATA_DIR / "clientes_prioritarios.json"
 ALARMAS_PATH = DATA_DIR / "alarmas.csv"
 GESTIONES_PATH = DATA_DIR / "gestiones.csv"
 
 COLS_ALARMAS = [
     "id_alarma", "codigo_oc", "prefijo_cliente", "nombre_organismo",
-    "monto", "fecha_creacion", "fecha_cierre", "estado_oc", "categoria",
+    "monto", "fecha_creacion", "fecha_envio", "fecha_cierre", "estado_oc", "categoria",
+    "plazo", "fecha_limite",
     "fecha_detectada", "estado_alarma", "fecha_gestion", "ejecutivo_gestion",
 ]
 
@@ -355,24 +364,87 @@ def send_email(rows_del_dia: list[dict], fecha_consulta: str) -> None:
 
 # ── SISTEMA DE ALARMAS ────────────────────────────────────────────────────────
 
-def cargar_clientes_prioritarios() -> set:
-    """Retorna set de prefijos de OC de clientes prioritarios desde JSON."""
+def cargar_clientes_prioritarios() -> tuple:
+    """Retorna (prefijos_set, plazos_dict) desde clientes_prioritarios.json.
+
+    prefijos_set: set de strings para búsqueda rápida O(1).
+    plazos_dict:  {prefijo: plazo_str} con el SLA de cada cliente.
+    En caso de error retorna (set(), {}).
+    """
     if not CLIENTES_PRIORITARIOS_PATH.exists():
         print("  [ALARMAS] clientes_prioritarios.json no encontrado — alarmas desactivadas.")
-        return set()
+        return set(), {}
     try:
         with open(CLIENTES_PRIORITARIOS_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        prefijos = {str(c["prefijo"]).strip() for c in data.get("clientes", []) if c.get("prefijo")}
+        clientes = data.get("clientes", [])
+        prefijos = {str(c["prefijo"]).strip() for c in clientes if c.get("prefijo")}
+        plazos = {str(c["prefijo"]).strip(): c.get("plazo", "") for c in clientes if c.get("prefijo")}
         prefijos.discard("EJEMPLO")
+        plazos.pop("EJEMPLO", None)
         if not prefijos:
             print("  [ALARMAS] Sin clientes prioritarios configurados.")
         else:
             print(f"  [ALARMAS] Clientes prioritarios: {sorted(prefijos)}")
-        return prefijos
+        return prefijos, plazos
     except Exception as e:
         print(f"  [ALARMAS] Error leyendo clientes_prioritarios.json: {e}")
-        return set()
+        return set(), {}
+
+
+def parsear_plazo(plazo_str: str, fecha_envio_str: str) -> str:
+    """Calcula fecha_limite sumando el plazo a fecha_envio.
+
+    Patrones soportados:
+      - "N horas desde emisión"  → fecha_envio + N horas
+      - "N días corridos"        → fecha_envio + N días
+      - Cualquier otro patrón    → "" (sin deadline calculable)
+
+    Retorna string ISO o "" en caso de error/patrón desconocido.
+    """
+    if not plazo_str or not fecha_envio_str:
+        return ""
+    try:
+        fecha_envio = datetime.fromisoformat(fecha_envio_str)
+    except (ValueError, TypeError):
+        return ""
+    plazo_lower = plazo_str.lower()
+    m_horas = re.search(r"(\d+)\s*hora", plazo_lower)
+    m_dias = re.search(r"(\d+)\s*d[íi]a", plazo_lower)
+    if m_horas:
+        return (fecha_envio + timedelta(hours=int(m_horas.group(1)))).isoformat()
+    if m_dias:
+        return (fecha_envio + timedelta(days=int(m_dias.group(1)))).isoformat()
+    return ""
+
+
+_URGENCY_ORDER = {"VENCIDA": 0, "URGENTE": 1, "HOY": 2, "A_TIEMPO": 3, "": 4}
+
+
+def clasificar_urgencia(fecha_limite_str: str) -> str:
+    """Clasifica urgencia según tiempo restante hasta fecha_limite.
+
+    Retorna: "VENCIDA" | "URGENTE" (< 4h) | "HOY" | "A_TIEMPO" | ""
+    Vacío se retorna cuando no hay fecha_limite definida (sin SLA calculable).
+    """
+    if not fecha_limite_str or str(fecha_limite_str).strip() in ("", "nan", "None"):
+        return ""
+    try:
+        tz_chile = ZoneInfo("America/Santiago")
+        ahora = datetime.now(tz_chile)
+        fecha_limite = datetime.fromisoformat(str(fecha_limite_str))
+        if fecha_limite.tzinfo is None:
+            fecha_limite = fecha_limite.replace(tzinfo=tz_chile)
+        remaining = fecha_limite - ahora
+        if remaining.total_seconds() < 0:
+            return "VENCIDA"
+        if remaining.total_seconds() < 4 * 3600:
+            return "URGENTE"
+        if fecha_limite.date() == ahora.date():
+            return "HOY"
+        return "A_TIEMPO"
+    except (ValueError, TypeError):
+        return ""
 
 
 def cargar_alarmas_existentes() -> pd.DataFrame:
@@ -417,8 +489,11 @@ def detectar_nuevas_alarmas(
     df_consol: pd.DataFrame,
     prefijos_prioritarios: set,
     df_alarmas_existentes: pd.DataFrame,
+    plazos_dict: dict = None,
 ) -> pd.DataFrame:
     """Detecta OC nuevas de clientes prioritarios que aún no tienen alarma."""
+    if plazos_dict is None:
+        plazos_dict = {}
     if df_consol.empty or not prefijos_prioritarios:
         return pd.DataFrame(columns=COLS_ALARMAS)
 
@@ -447,16 +522,22 @@ def detectar_nuevas_alarmas(
     ahora = datetime.now().isoformat()
     filas = []
     for _, row in df_nuevas.iterrows():
+        prefijo = _get(row, "_prefijo")
+        fecha_envio = _get(row, "Fechas.FechaEnvio")
+        plazo = plazos_dict.get(prefijo, "")
         filas.append({
             "id_alarma": str(uuid.uuid4()),
             "codigo_oc": _get(row, "Codigo"),
-            "prefijo_cliente": _get(row, "_prefijo"),
+            "prefijo_cliente": prefijo,
             "nombre_organismo": _get(row, "Comprador.NombreOrganismo", "NombreOrganismoPublico_base"),
             "monto": _get(row, "Monto", "TotalNeto", "Total"),
             "fecha_creacion": _get(row, "Fechas.FechaCreacion", "FechaCreacion"),
+            "fecha_envio": fecha_envio,
             "fecha_cierre": _get(row, "Fechas.FechaCancelacion", "FechaCierre"),
             "estado_oc": _get(row, "Estado"),
             "categoria": _get(row, "CategoriaProducto"),
+            "plazo": plazo,
+            "fecha_limite": parsear_plazo(plazo, fecha_envio),
             "fecha_detectada": ahora,
             "estado_alarma": "ACTIVA",
             "fecha_gestion": "",
@@ -473,6 +554,38 @@ def guardar_alarmas(df_alarmas: pd.DataFrame) -> None:
     print(f"  [ALARMAS] alarmas.csv guardado: {len(df_alarmas)} registros totales.")
 
 
+def generar_resumen_gemini(df_activas: pd.DataFrame) -> str:
+    """Genera resumen ejecutivo en español usando Gemini AI.
+
+    Retorna string con 2-3 oraciones, o "" si no disponible/falla.
+    Nunca lanza excepción — fallo silencioso.
+    """
+    if not _GENAI_AVAILABLE or not GEMINI_API_KEY or df_activas.empty:
+        return ""
+    try:
+        cols_payload = [c for c in ["codigo_oc", "nombre_organismo", "monto", "fecha_envio",
+                                     "fecha_limite", "plazo", "urgencia"] if c in df_activas.columns]
+        alarmas_data = df_activas[cols_payload].head(20).to_dict("records")
+        json_payload = json.dumps(alarmas_data, ensure_ascii=False, default=str)
+        prompt = (
+            "Eres el asistente de operaciones de una empresa de servicios de alimentación en Chile "
+            "que vende a organismos públicos a través de Mercado Público.\n\n"
+            f"Tienes las siguientes alarmas activas de órdenes de compra de clientes prioritarios:\n{json_payload}\n\n"
+            "Genera un resumen ejecutivo de 2 a 3 oraciones en español para el equipo de operaciones. "
+            "El resumen debe: "
+            "1. Identificar cuántas OC requieren acción inmediata (VENCIDA o URGENTE) y nombrar los clientes más críticos. "
+            "2. Mencionar el monto total aproximado en juego si es relevante. "
+            "3. Sugerir la prioridad de acción para hoy. "
+            "Sé directo y usa lenguaje operacional. No uses bullet points, solo párrafo corrido."
+        )
+        client = _genai_module.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"  [GEMINI] Error generando resumen IA: {e}")
+        return ""
+
+
 def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n_dias: int = 7) -> None:
     """Envía digest con alarmas activas + historial de los últimos n_dias días."""
     if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_ALERTAS]):
@@ -486,8 +599,25 @@ def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n
     else:
         subject = f"⚠️ Resumen Alarmas · {len(df_activas)} activa(s) · {ahora}"
 
-    cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria",
-                 "fecha_cierre", "estado_alarma", "fecha_detectada", "ejecutivo_gestion"]
+    cols_show = [
+        "codigo_oc", "nombre_organismo", "monto", "fecha_envio",
+        "plazo", "fecha_limite", "urgencia",
+        "categoria", "fecha_cierre", "estado_alarma", "ejecutivo_gestion",
+    ]
+
+    # Calcular urgencia y ordenar activas (más urgente primero)
+    if not df_activas.empty:
+        df_activas = df_activas.copy()
+        df_activas["urgencia"] = df_activas["fecha_limite"].apply(clasificar_urgencia)
+        df_activas["_rank"] = df_activas["urgencia"].map(_URGENCY_ORDER).fillna(4)
+        df_activas = df_activas.sort_values("_rank").drop(columns=["_rank"])
+
+    _BADGE_COLORS = {
+        "VENCIDA": ("#dc3545", "white"),
+        "URGENTE": ("#fd7e14", "white"),
+        "HOY":     ("#ffc107", "#222"),
+        "A_TIEMPO": ("#28a745", "white"),
+    }
 
     def _tabla(df, highlight_col="estado_alarma"):
         if df.empty:
@@ -505,10 +635,21 @@ def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n
                 bg = "#d4edda" if i % 2 == 0 else "#e8f5e9"
             else:
                 bg = "#f9f9f9" if i % 2 == 0 else "#ffffff"
-            cells = "".join(
-                f"<td style='padding:5px 10px'>{row.get(c, '')}</td>"
-                for c in cols_show if c in df.columns
-            )
+            cells = ""
+            for c in cols_show:
+                if c not in df.columns:
+                    continue
+                val = str(row.get(c, "") or "")
+                if c == "urgencia" and val in _BADGE_COLORS:
+                    bg_c, txt_c = _BADGE_COLORS[val]
+                    cell_html = (
+                        f"<span style='background:{bg_c};color:{txt_c};"
+                        f"padding:2px 7px;border-radius:3px;font-weight:bold;"
+                        f"font-size:11px'>{val}</span>"
+                    )
+                else:
+                    cell_html = val
+                cells += f"<td style='padding:5px 10px'>{cell_html}</td>"
             rows_html += f"<tr style='background:{bg}'>{cells}</tr>"
         return f"""
         <table border="0" cellpadding="0" cellspacing="0"
@@ -520,6 +661,18 @@ def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n
     n_gestionadas = len(df_historial[df_historial["estado_alarma"] == "GESTIONADA"]) if not df_historial.empty else 0
     repo_url = "https://github.com/hurtadodaniel/mp/edit/master/data/gestiones.csv"
 
+    # Panel IA — generado antes de construir el HTML
+    resumen_ia = generar_resumen_gemini(df_activas)
+    gemini_panel_html = ""
+    if resumen_ia:
+        gemini_panel_html = f"""
+        <div style="background:#f0f4ff;border-left:4px solid #1a56db;
+                    padding:14px 18px;margin-bottom:18px;border-radius:0 4px 4px 0">
+          <p style="margin:0 0 6px;font-size:11px;color:#555;font-weight:bold;
+                    text-transform:uppercase;letter-spacing:0.5px">Resumen IA · Gemini</p>
+          <p style="margin:0;font-size:13px;color:#222;line-height:1.6">{resumen_ia}</p>
+        </div>"""
+
     html = f"""
     <html><body style="font-family:Arial,sans-serif;color:#222;max-width:960px;margin:auto">
       <div style="background:#1a56db;color:white;padding:16px 24px;border-radius:6px 6px 0 0">
@@ -527,6 +680,8 @@ def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n
         <p style="margin:4px 0 0">{ahora} · Últimos {n_dias} días</p>
       </div>
       <div style="background:#f8faff;border:2px solid #1a56db;padding:16px 24px">
+
+        {gemini_panel_html}
 
         <h3 style="color:#c0392b;margin-top:0">
           🔴 Alarmas ACTIVAS ({len(df_activas)})
@@ -553,15 +708,19 @@ def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n
     </body></html>
     """
 
+    plain_activas = "\n".join(
+        f"  [{r['estado_alarma']}] {r['codigo_oc']} | {r['nombre_organismo']} "
+        f"| urgencia: {r.get('urgencia','')} | límite: {r.get('fecha_limite','')} "
+        f"| {r.get('categoria','')} | cierre: {r.get('fecha_cierre','')}"
+        for _, r in df_activas.iterrows()
+    )
     plain = (
         f"RESUMEN ALARMAS — {ahora}\n"
-        f"Activas: {len(df_activas)} | Gestionadas últimos {n_dias}d: {n_gestionadas}\n\n"
-        + "\n".join(
-            f"  [{r['estado_alarma']}] {r['codigo_oc']} | {r['nombre_organismo']} | {r.get('categoria','')} | cierre: {r.get('fecha_cierre','')}"
-            for _, r in df_activas.iterrows()
-        )
-        + f"\n\nGestionar en: {repo_url}"
+        f"Activas: {len(df_activas)} | Gestionadas últimos {n_dias}d: {n_gestionadas}\n"
     )
+    if resumen_ia:
+        plain += f"\nRESUMEN IA:\n{resumen_ia}\n"
+    plain += f"\n{plain_activas}\n\nGestionar en: {repo_url}"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -590,7 +749,8 @@ def enviar_email_alarmas(nuevas: pd.DataFrame, activas: pd.DataFrame) -> None:
     subject = f"\u26a0\ufe0f ALARMA \u00b7 {len(nuevas)} OC Prioritaria(s) Nueva(s) \u00b7 {fecha_hoy}"
 
     def _tabla_alarmas(df, highlight=False):
-        cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria", "fecha_cierre", "estado_oc"]
+        cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria",
+                     "fecha_creacion", "fecha_envio", "fecha_cierre", "estado_oc"]
         header = "".join(f"<th style='padding:6px 10px;text-align:left'>{c}</th>" for c in cols_show)
         rows_html = ""
         for i, (_, row) in enumerate(df.iterrows()):
@@ -980,11 +1140,11 @@ def main() -> None:
     # ALARMAS: clientes prioritarios
     # ══════════════════════════════════════════════════════════════════════════
     print("\n[ALARMAS] Verificando clientes prioritarios...")
-    prefijos_prioritarios = cargar_clientes_prioritarios()
+    prefijos_prioritarios, plazos_dict = cargar_clientes_prioritarios()
     if prefijos_prioritarios:
         df_alarmas = cargar_alarmas_existentes()
         df_alarmas = aplicar_gestiones(df_alarmas)
-        nuevas_alarmas = detectar_nuevas_alarmas(df_consol, prefijos_prioritarios, df_alarmas)
+        nuevas_alarmas = detectar_nuevas_alarmas(df_consol, prefijos_prioritarios, df_alarmas, plazos_dict)
         if not nuevas_alarmas.empty:
             df_alarmas = pd.concat([df_alarmas, nuevas_alarmas], ignore_index=True)
         guardar_alarmas(df_alarmas)
