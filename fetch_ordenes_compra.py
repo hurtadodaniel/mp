@@ -561,12 +561,12 @@ def guardar_alarmas(df_alarmas: pd.DataFrame) -> None:
 
 
 def generar_resumen_gemini(df_activas: pd.DataFrame) -> str:
-    """Genera resumen ejecutivo en español usando Gemini AI.
+    """Genera resumen ejecutivo en español usando Gemini AI (REST directo).
 
     Retorna string con 2-3 oraciones, o "" si no disponible/falla.
     Nunca lanza excepción — fallo silencioso.
     """
-    if not _GENAI_AVAILABLE or not GEMINI_API_KEY or df_activas.empty:
+    if not GEMINI_API_KEY or df_activas.empty:
         return ""
     try:
         cols_payload = [c for c in ["codigo_oc", "nombre_organismo", "monto", "fecha_envio",
@@ -584,9 +584,15 @@ def generar_resumen_gemini(df_activas: pd.DataFrame) -> str:
             "3. Sugerir la prioridad de acción para hoy. "
             "Sé directo y usa lenguaje operacional. No uses bullet points, solo párrafo corrido."
         )
-        client = _genai_module.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-        return response.text.strip()
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        )
+        body = {"contents": [{"parts": [{"text": prompt}]}]}
+        resp = requests.post(url, json=body, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
         print(f"  [GEMINI] Error generando resumen IA: {e}")
         return ""
