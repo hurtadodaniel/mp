@@ -592,7 +592,7 @@ def enviar_email_alarmas(nuevas: pd.DataFrame, activas: pd.DataFrame) -> None:
 
     def _tabla_alarmas(df, highlight=False):
         cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria",
-                     "fecha_creacion", "fecha_envio", "fecha_cierre", "fecha_detectada", "estado_oc"]
+                     "fecha_creacion", "fecha_envio", "fecha_cierre", "estado_oc"]
         header = "".join(f"<th style='padding:6px 10px;text-align:left'>{c}</th>" for c in cols_show)
         rows_html = ""
         for i, (_, row) in enumerate(df.iterrows()):
