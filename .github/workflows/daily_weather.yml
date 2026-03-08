@@ -49,12 +49,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Fetch órdenes de compra (incremental)
-        env:
-          MP_TICKET: ${{ secrets.MP_TICKET }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_ALERTAS: ${{ secrets.EMAIL_ALERTAS }}
         run: |
           FECHA_ARG=""
           if [ -n "${{ github.event.inputs.fecha }}" ]; then
@@ -104,8 +98,4 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Enviar resumen de alarmas (últimos 7 días)
-        env:
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_ALERTAS: ${{ secrets.EMAIL_ALERTAS }}
         run: python fetch_ordenes_compra.py --resumen
