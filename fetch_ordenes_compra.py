@@ -481,7 +481,10 @@ def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n
 
     recipients = [r.strip() for r in EMAIL_ALERTAS.split(",") if r.strip()]
     ahora = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d %H:%M")
-    subject = f"📋 Resumen Alarmas · {len(df_activas)} activa(s) · {ahora}"
+    if len(df_activas) == 0:
+        subject = f"✅ Bot activo · Sin alarmas pendientes · {ahora}"
+    else:
+        subject = f"⚠️ Resumen Alarmas · {len(df_activas)} activa(s) · {ahora}"
 
     cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria",
                  "fecha_cierre", "estado_alarma", "fecha_detectada", "ejecutivo_gestion"]
