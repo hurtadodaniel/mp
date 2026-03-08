@@ -1,1 +1,4 @@
-id_alarma,codigo_oc,prefijo_cliente,nombre_organismo,monto,fecha_creacion,fecha_cierre,estado_oc,categoria,fecha_detectada,estado_alarma,fecha_gestion,ejecutivo_gestion
+id_alarma,codigo_oc,prefijo_cliente,nombre_organismo,monto,fecha_creacion,fecha_envio,fecha_cierre,estado_oc,categoria,fecha_detectada,estado_alarma,fecha_gestion,ejecutivo_gestion
+a1b2c3d4-0001-0001-0001-000000000001,1382-187-SE26,1382,Consultorio Miraflores,17465259,2026-02-27T11:25:32.963,2026-02-27T11:59:17.390,,Aceptada,ALIMENTACION,2026-02-28T09:00:00,GESTIONADA,2026-02-28T10:30:00,Felipe Hurtado
+a1b2c3d4-0002-0002-0002-000000000002,2085-172-CM26,2085,Servicio de Salud Araucanía Hospital de Traiguen,1220940,2026-02-23T08:57:08.687,2026-02-23T09:22:24.343,,Recepción Conforme,ALIMENTACION,2026-02-28T09:00:00,GESTIONADA,2026-02-28T11:15:00,Felipe Hurtado
+a1b2c3d4-0003-0003-0003-000000000003,1079694-46-CM26,1079694,Dirección de Logística de Carabineros,26274149,2026-02-17T16:38:26.150,2026-02-17T16:47:58.970,,Recepción Conforme,ALIMENTACION,2026-02-28T09:00:00,GESTIONADA,2026-03-01T09:00:00,María González
