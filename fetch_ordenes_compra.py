@@ -85,7 +85,7 @@ EMAIL_TO = os.getenv("EMAIL_TO") or "hurtadodaniel.cl@gmail.com"
 # ── ALARMAS ───────────────────────────────────────────────────────────────────
 
 EMAIL_ALERTAS = os.getenv("EMAIL_ALERTAS") or EMAIL_FROM
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AIzaSyD_ZIHDx1Iugtl0S-Tv-Swfp0HM0TZ6gHU"
 CLIENTES_PRIORITARIOS_PATH = DATA_DIR / "clientes_prioritarios.json"
 ALARMAS_PATH = DATA_DIR / "alarmas.csv"
 GESTIONES_PATH = DATA_DIR / "gestiones.csv"
