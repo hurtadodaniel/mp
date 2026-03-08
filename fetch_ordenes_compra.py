@@ -78,7 +78,7 @@ GESTIONES_PATH = DATA_DIR / "gestiones.csv"
 
 COLS_ALARMAS = [
     "id_alarma", "codigo_oc", "prefijo_cliente", "nombre_organismo",
-    "monto", "fecha_creacion", "fecha_cierre", "estado_oc", "categoria",
+    "monto", "fecha_creacion", "fecha_envio", "fecha_cierre", "estado_oc", "categoria",
     "fecha_detectada", "estado_alarma", "fecha_gestion", "ejecutivo_gestion",
 ]
 
@@ -454,6 +454,7 @@ def detectar_nuevas_alarmas(
             "nombre_organismo": _get(row, "Comprador.NombreOrganismo", "NombreOrganismoPublico_base"),
             "monto": _get(row, "Monto", "TotalNeto", "Total"),
             "fecha_creacion": _get(row, "Fechas.FechaCreacion", "FechaCreacion"),
+            "fecha_envio": _get(row, "Fechas.FechaEnvio"),
             "fecha_cierre": _get(row, "Fechas.FechaCancelacion", "FechaCierre"),
             "estado_oc": _get(row, "Estado"),
             "categoria": _get(row, "CategoriaProducto"),
@@ -591,7 +592,7 @@ def enviar_email_alarmas(nuevas: pd.DataFrame, activas: pd.DataFrame) -> None:
 
     def _tabla_alarmas(df, highlight=False):
         cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria",
-                     "fecha_creacion", "fecha_cierre", "fecha_detectada", "estado_oc"]
+                     "fecha_creacion", "fecha_envio", "fecha_cierre", "fecha_detectada", "estado_oc"]
         header = "".join(f"<th style='padding:6px 10px;text-align:left'>{c}</th>" for c in cols_show)
         rows_html = ""
         for i, (_, row) in enumerate(df.iterrows()):
