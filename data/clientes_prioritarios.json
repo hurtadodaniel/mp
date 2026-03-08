@@ -1,0 +1,85 @@
+{
+  "clientes": [
+    {
+      "prefijo": "1398",
+      "nombre": "Servicio Salud O'Higgins",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1627",
+      "nombre": "Hospital de San Fernando",
+      "plazo": "Emiten OC entre el 13 de cada mes"
+    },
+    {
+      "prefijo": "904280",
+      "nombre": "Depto. Bienes Raices L6 (Carabineros)",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1079454",
+      "nombre": "Carabineros Antofagasta",
+      "plazo": "3 días corridos"
+    },
+    {
+      "prefijo": "1079486",
+      "nombre": "Carabineros Atacama",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1063538",
+      "nombre": "Hospital Base Osorno",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1057374",
+      "nombre": "Hospital San Francisco de Mostazal",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1175",
+      "nombre": "Servicio Salud Araucanía",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1057508",
+      "nombre": "Servicio Salud Ñuble",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "2067",
+      "nombre": "Hospital de Cunco",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1952",
+      "nombre": "Hospital de Villarrica",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1380",
+      "nombre": "Hospital de Temuco",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1382",
+      "nombre": "Consultorio Miraflores",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1171142",
+      "nombre": "Complejo Asistencial Padre Las Casas",
+      "plazo": "24 horas desde emisión"
+    },
+    {
+      "prefijo": "1951",
+      "nombre": "Hospital de Carahue",
+      "plazo": "24 horas desde emisión"
+    }
+  ],
+  "_sin_prefijo": [
+    { "nombre": "Hospital de Ovalle", "tri": 36712, "nota": "prefijo no disponible en tabla" },
+    { "nombre": "Depto. Control Financiero (Carabineros)", "tri": 40502, "nota": "prefijo no disponible en tabla" },
+    { "nombre": "Depto. Analisis Criminal (Carabineros)", "tri": 41762, "nota": "prefijo no disponible en tabla" },
+    { "nombre": "Depto. Armamento y Municiones (Carabineros)", "tri": 40708, "nota": "prefijo no disponible en tabla" }
+  ]
+}

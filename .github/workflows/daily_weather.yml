@@ -2,25 +2,39 @@ name: Daily OC Fetch — Mercado Público
 
 on:
   schedule:
-    # Chile verano = UTC-3. Horarios locales → UTC:
-    - cron: '0 12 * * *'   # 09:00 Chile
-    - cron: '0 14 * * *'   # 11:00 Chile
-    - cron: '0 16 * * *'   # 13:00 Chile (1 PM)
-  # Allows manual execution from the GitHub Actions tab
+    # ── Fetch horario (cada hora, todo el día) ────────────────────────────────
+    # Chile verano = UTC-3 | invierno = UTC-4
+    - cron: '0 * * * *'     # Cada hora en punto → fetch + alarmas nuevas
+
+    # ── Resumen de alarmas (9:00 y 18:00 hora Chile verano) ───────────────────
+    - cron: '0 12 * * *'    # 09:00 Chile (UTC-3)  → resumen alarmas
+    - cron: '0 21 * * *'    # 18:00 Chile (UTC-3)  → resumen alarmas
+
   workflow_dispatch:
     inputs:
       fecha:
-        description: 'Fecha en formato DDMMAAAA (default: hoy)'
+        description: 'Fecha en formato DDMMAAAA (solo para modo fetch; default: hoy)'
         required: false
         default: ''
+      mode:
+        description: 'fetch = extrae OC y detecta alarmas | resumen = solo envía digest de alarmas'
+        required: false
+        default: 'fetch'
 
 jobs:
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 1 — Fetch horario de OC (corre cada hora + dispatch manual en modo fetch)
+  # ════════════════════════════════════════════════════════════════════════════
   fetch-data:
+    if: >
+      github.event.schedule == '0 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'resumen')
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     permissions:
-      contents: write  # needed to commit the CSV back to the repo
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -35,19 +49,11 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Fetch órdenes de compra (incremental)
-        env:
-          MP_TICKET: ${{ secrets.MP_TICKET }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
           FECHA_ARG=""
-
-          # If triggered manually with a date input, use it
           if [ -n "${{ github.event.inputs.fecha }}" ]; then
             FECHA_ARG="--fecha ${{ github.event.inputs.fecha }}"
           fi
-
           python fetch_ordenes_compra.py $FECHA_ARG
 
       - name: Commit and push updated CSVs
@@ -56,17 +62,40 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          # Inject token into remote URL so push can authenticate
           git remote set-url origin \
             https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
-          # Only add data/ if it exists (no orders = no directory)
           if [ -d data ]; then
             git add data/
           fi
-          # Only commit and push if there are staged changes
           if git diff --staged --quiet; then
             echo "Sin cambios que guardar."
           else
             git commit -m "chore: OC Mercado Público $(date +'%Y-%m-%d %H:%M UTC')"
             git push origin HEAD:${{ github.ref_name }}
           fi
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 2 — Resumen de alarmas (9:00 y 18:00 Chile + dispatch manual modo resumen)
+  # ════════════════════════════════════════════════════════════════════════════
+  alarm-digest:
+    if: >
+      github.event.schedule == '0 12 * * *' ||
+      github.event.schedule == '0 21 * * *' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'resumen')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Enviar resumen de alarmas (últimos 7 días)
+        run: python fetch_ordenes_compra.py --resumen

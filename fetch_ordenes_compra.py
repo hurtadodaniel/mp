@@ -20,11 +20,13 @@ import argparse
 import ast
 import csv
 import io
+import json
 import os
 import random
 import smtplib
 import sys
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -66,6 +68,19 @@ CSV_CONSOLIDADO = DATA_DIR / "ordenes_consolidado.csv"
 EMAIL_FROM = os.getenv("EMAIL_FROM") or "hurtadodaniel.cl@gmail.com"
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD") or "jcbf wpfn psqb tfnx"
 EMAIL_TO = os.getenv("EMAIL_TO") or "hurtadodaniel.cl@gmail.com"
+
+# ── ALARMAS ───────────────────────────────────────────────────────────────────
+
+EMAIL_ALERTAS = os.getenv("EMAIL_ALERTAS") or EMAIL_FROM
+CLIENTES_PRIORITARIOS_PATH = DATA_DIR / "clientes_prioritarios.json"
+ALARMAS_PATH = DATA_DIR / "alarmas.csv"
+GESTIONES_PATH = DATA_DIR / "gestiones.csv"
+
+COLS_ALARMAS = [
+    "id_alarma", "codigo_oc", "prefijo_cliente", "nombre_organismo",
+    "monto", "fecha_creacion", "fecha_cierre", "estado_oc", "categoria",
+    "fecha_detectada", "estado_alarma", "fecha_gestion", "ejecutivo_gestion",
+]
 
 # ── SCHEMA (garantiza columnas aunque no haya datos) ──────────────────────────
 
@@ -338,6 +353,316 @@ def send_email(rows_del_dia: list[dict], fecha_consulta: str) -> None:
     print("  Correo enviado correctamente.")
 
 
+# ── SISTEMA DE ALARMAS ────────────────────────────────────────────────────────
+
+def cargar_clientes_prioritarios() -> set:
+    """Retorna set de prefijos de OC de clientes prioritarios desde JSON."""
+    if not CLIENTES_PRIORITARIOS_PATH.exists():
+        print("  [ALARMAS] clientes_prioritarios.json no encontrado — alarmas desactivadas.")
+        return set()
+    try:
+        with open(CLIENTES_PRIORITARIOS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        prefijos = {str(c["prefijo"]).strip() for c in data.get("clientes", []) if c.get("prefijo")}
+        prefijos.discard("EJEMPLO")
+        if not prefijos:
+            print("  [ALARMAS] Sin clientes prioritarios configurados.")
+        else:
+            print(f"  [ALARMAS] Clientes prioritarios: {sorted(prefijos)}")
+        return prefijos
+    except Exception as e:
+        print(f"  [ALARMAS] Error leyendo clientes_prioritarios.json: {e}")
+        return set()
+
+
+def cargar_alarmas_existentes() -> pd.DataFrame:
+    """Carga el historial de alarmas existentes o retorna DataFrame vacío."""
+    if not ALARMAS_PATH.exists():
+        return pd.DataFrame(columns=COLS_ALARMAS)
+    try:
+        df = pd.read_csv(ALARMAS_PATH, dtype=str)
+        for col in COLS_ALARMAS:
+            if col not in df.columns:
+                df[col] = ""
+        return df[COLS_ALARMAS]
+    except Exception as e:
+        print(f"  [ALARMAS] Error leyendo alarmas.csv: {e}")
+        return pd.DataFrame(columns=COLS_ALARMAS)
+
+
+def aplicar_gestiones(df_alarmas: pd.DataFrame) -> pd.DataFrame:
+    """Marca alarmas como GESTIONADA según las filas en gestiones.csv."""
+    if not GESTIONES_PATH.exists() or df_alarmas.empty:
+        return df_alarmas
+    try:
+        df_gest = pd.read_csv(GESTIONES_PATH, dtype=str)
+        if df_gest.empty or "codigo_oc" not in df_gest.columns:
+            return df_alarmas
+        for _, g in df_gest.iterrows():
+            codigo = str(g.get("codigo_oc", "")).strip()
+            if not codigo:
+                continue
+            mask = (df_alarmas["codigo_oc"] == codigo) & (df_alarmas["estado_alarma"] == "ACTIVA")
+            if mask.any():
+                df_alarmas.loc[mask, "estado_alarma"] = "GESTIONADA"
+                df_alarmas.loc[mask, "fecha_gestion"] = str(g.get("fecha_gestion", "")).strip()
+                df_alarmas.loc[mask, "ejecutivo_gestion"] = str(g.get("ejecutivo", "")).strip()
+                print(f"  [ALARMAS] OC {codigo} marcada GESTIONADA por {g.get('ejecutivo', '?')}")
+    except Exception as e:
+        print(f"  [ALARMAS] Error procesando gestiones.csv: {e}")
+    return df_alarmas
+
+
+def detectar_nuevas_alarmas(
+    df_consol: pd.DataFrame,
+    prefijos_prioritarios: set,
+    df_alarmas_existentes: pd.DataFrame,
+) -> pd.DataFrame:
+    """Detecta OC nuevas de clientes prioritarios que aún no tienen alarma."""
+    if df_consol.empty or not prefijos_prioritarios:
+        return pd.DataFrame(columns=COLS_ALARMAS)
+
+    # Extraer prefijo (numero antes del primer guion)
+    df = df_consol.copy()
+    df["_prefijo"] = df["Codigo"].astype(str).str.split("-").str[0].str.strip()
+
+    df_match = df[df["_prefijo"].isin(prefijos_prioritarios)].copy()
+    if df_match.empty:
+        return pd.DataFrame(columns=COLS_ALARMAS)
+
+    # Excluir OC que ya tienen alarma registrada (sin importar estado)
+    codigos_con_alarma = set(df_alarmas_existentes["codigo_oc"].dropna().unique()) if not df_alarmas_existentes.empty else set()
+    df_nuevas = df_match[~df_match["Codigo"].isin(codigos_con_alarma)]
+
+    if df_nuevas.empty:
+        return pd.DataFrame(columns=COLS_ALARMAS)
+
+    def _get(row, *cols):
+        for c in cols:
+            v = str(row.get(c, "") or "").strip()
+            if v and v.lower() not in ("nan", "none", ""):
+                return v
+        return ""
+
+    ahora = datetime.now().isoformat()
+    filas = []
+    for _, row in df_nuevas.iterrows():
+        filas.append({
+            "id_alarma": str(uuid.uuid4()),
+            "codigo_oc": _get(row, "Codigo"),
+            "prefijo_cliente": _get(row, "_prefijo"),
+            "nombre_organismo": _get(row, "Comprador.NombreOrganismo", "NombreOrganismoPublico_base"),
+            "monto": _get(row, "Monto", "TotalNeto", "Total"),
+            "fecha_creacion": _get(row, "Fechas.FechaCreacion", "FechaCreacion"),
+            "fecha_cierre": _get(row, "Fechas.FechaCancelacion", "FechaCierre"),
+            "estado_oc": _get(row, "Estado"),
+            "categoria": _get(row, "CategoriaProducto"),
+            "fecha_detectada": ahora,
+            "estado_alarma": "ACTIVA",
+            "fecha_gestion": "",
+            "ejecutivo_gestion": "",
+        })
+
+    print(f"  [ALARMAS] {len(filas)} OC nueva(s) de clientes prioritarios detectadas.")
+    return pd.DataFrame(filas, columns=COLS_ALARMAS)
+
+
+def guardar_alarmas(df_alarmas: pd.DataFrame) -> None:
+    """Escribe el CSV completo de alarmas (reemplaza)."""
+    df_alarmas.to_csv(ALARMAS_PATH, index=False, encoding="utf-8")
+    print(f"  [ALARMAS] alarmas.csv guardado: {len(df_alarmas)} registros totales.")
+
+
+def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n_dias: int = 7) -> None:
+    """Envía digest con alarmas activas + historial de los últimos n_dias días."""
+    if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_ALERTAS]):
+        print("  [RESUMEN] Email no configurado — saltando.")
+        return
+
+    recipients = [r.strip() for r in EMAIL_ALERTAS.split(",") if r.strip()]
+    ahora = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d %H:%M")
+    if len(df_activas) == 0:
+        subject = f"✅ Bot activo · Sin alarmas pendientes · {ahora}"
+    else:
+        subject = f"⚠️ Resumen Alarmas · {len(df_activas)} activa(s) · {ahora}"
+
+    cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria",
+                 "fecha_cierre", "estado_alarma", "fecha_detectada", "ejecutivo_gestion"]
+
+    def _tabla(df, highlight_col="estado_alarma"):
+        if df.empty:
+            return "<p style='color:#888;font-style:italic'>Sin registros.</p>"
+        header = "".join(
+            f"<th style='padding:6px 10px;text-align:left;white-space:nowrap'>{c}</th>"
+            for c in cols_show if c in df.columns
+        )
+        rows_html = ""
+        for i, (_, row) in enumerate(df.iterrows()):
+            estado = str(row.get("estado_alarma", ""))
+            if estado == "ACTIVA":
+                bg = "#fff3cd" if i % 2 == 0 else "#fff8e7"
+            elif estado == "GESTIONADA":
+                bg = "#d4edda" if i % 2 == 0 else "#e8f5e9"
+            else:
+                bg = "#f9f9f9" if i % 2 == 0 else "#ffffff"
+            cells = "".join(
+                f"<td style='padding:5px 10px'>{row.get(c, '')}</td>"
+                for c in cols_show if c in df.columns
+            )
+            rows_html += f"<tr style='background:{bg}'>{cells}</tr>"
+        return f"""
+        <table border="0" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse;font-family:monospace;font-size:12px;width:100%;margin-bottom:16px">
+          <thead style="background:#1a56db;color:white"><tr>{header}</tr></thead>
+          <tbody>{rows_html}</tbody>
+        </table>"""
+
+    n_gestionadas = len(df_historial[df_historial["estado_alarma"] == "GESTIONADA"]) if not df_historial.empty else 0
+    repo_url = "https://github.com/hurtadodaniel/mp/edit/master/data/gestiones.csv"
+
+    html = f"""
+    <html><body style="font-family:Arial,sans-serif;color:#222;max-width:960px;margin:auto">
+      <div style="background:#1a56db;color:white;padding:16px 24px;border-radius:6px 6px 0 0">
+        <h2 style="margin:0">📋 Resumen de Alarmas — Mercado Público</h2>
+        <p style="margin:4px 0 0">{ahora} · Últimos {n_dias} días</p>
+      </div>
+      <div style="background:#f8faff;border:2px solid #1a56db;padding:16px 24px">
+
+        <h3 style="color:#c0392b;margin-top:0">
+          🔴 Alarmas ACTIVAS ({len(df_activas)})
+        </h3>
+        {_tabla(df_activas)}
+
+        <h3 style="color:#27ae60">
+          ✅ Gestionadas en los últimos {n_dias} días ({n_gestionadas})
+        </h3>
+        {_tabla(df_historial[df_historial["estado_alarma"] == "GESTIONADA"]) if not df_historial.empty else "<p style='color:#888'>Sin registros.</p>"}
+
+        <h3 style="color:#555">
+          📅 Historial completo últimos {n_dias} días ({len(df_historial)})
+        </h3>
+        {_tabla(df_historial)}
+
+        <hr style="border:none;border-top:1px solid #ddd;margin:16px 0">
+        <p style="font-size:12px;color:#555">
+          Para marcar una OC como gestionada:
+          <a href="{repo_url}">Editar gestiones.csv en GitHub</a>
+        </p>
+        <p style="color:#aaa;font-size:11px">Generado automáticamente · GitHub Actions · Mercado Público</p>
+      </div>
+    </body></html>
+    """
+
+    plain = (
+        f"RESUMEN ALARMAS — {ahora}\n"
+        f"Activas: {len(df_activas)} | Gestionadas últimos {n_dias}d: {n_gestionadas}\n\n"
+        + "\n".join(
+            f"  [{r['estado_alarma']}] {r['codigo_oc']} | {r['nombre_organismo']} | {r.get('categoria','')} | cierre: {r.get('fecha_cierre','')}"
+            for _, r in df_activas.iterrows()
+        )
+        + f"\n\nGestionar en: {repo_url}"
+    )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(recipients)
+    msg.attach(MIMEText(plain, "plain", "utf-8"))
+    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    print(f"  [RESUMEN] Enviando digest a {recipients} …")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(EMAIL_FROM, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_FROM, recipients, msg.as_bytes())
+    print("  [RESUMEN] Digest enviado correctamente.")
+
+
+def enviar_email_alarmas(nuevas: pd.DataFrame, activas: pd.DataFrame) -> None:
+    """Envía email de alerta con nuevas OC prioritarias y resumen de activas."""
+    if nuevas.empty:
+        return
+    if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_ALERTAS]):
+        print("  [ALARMAS] Email no configurado — saltando alerta.")
+        return
+
+    recipients = [r.strip() for r in EMAIL_ALERTAS.split(",") if r.strip()]
+    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M")
+    subject = f"\u26a0\ufe0f ALARMA \u00b7 {len(nuevas)} OC Prioritaria(s) Nueva(s) \u00b7 {fecha_hoy}"
+
+    def _tabla_alarmas(df, highlight=False):
+        cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria", "fecha_cierre", "estado_oc"]
+        header = "".join(f"<th style='padding:6px 10px;text-align:left'>{c}</th>" for c in cols_show)
+        rows_html = ""
+        for i, (_, row) in enumerate(df.iterrows()):
+            bg = "#fff3cd" if highlight and i % 2 == 0 else ("#fff8e7" if highlight else ("#f9f9f9" if i % 2 == 0 else "#ffffff"))
+            cells = "".join(f"<td style='padding:5px 10px'>{row.get(c, '')}</td>" for c in cols_show)
+            rows_html += f"<tr style='background:{bg}'>{cells}</tr>"
+        thead_bg = "#c0392b" if highlight else "#555"
+        return f"""
+        <table border="0" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse;font-family:monospace;font-size:12px;width:100%;margin-bottom:16px">
+          <thead style="background:{thead_bg};color:white">
+            <tr>{header}</tr>
+          </thead>
+          <tbody>{rows_html}</tbody>
+        </table>"""
+
+    repo_url = "https://github.com/hurtadodaniel/mp/edit/master/data/gestiones.csv"
+    html = f"""
+    <html><body style="font-family:Arial,sans-serif;color:#222;max-width:900px;margin:auto">
+      <div style="background:#c0392b;color:white;padding:16px 24px;border-radius:6px 6px 0 0">
+        <h2 style="margin:0">\u26a0\ufe0f ALARMA &mdash; {len(nuevas)} OC Prioritaria(s) Nueva(s)</h2>
+        <p style="margin:4px 0 0">{fecha_hoy} &middot; Acción requerida</p>
+      </div>
+      <div style="background:#fff9f9;border:2px solid #c0392b;padding:16px 24px">
+        <h3 style="color:#c0392b;margin-top:0">OC Nuevas Detectadas</h3>
+        {_tabla_alarmas(nuevas, highlight=True)}
+
+        <h3 style="color:#555">Total Alarmas Activas: {len(activas)}</h3>
+        {_tabla_alarmas(activas) if not activas.empty else "<p style='color:#888'>Sin alarmas activas.</p>"}
+
+        <hr style="border:none;border-top:1px solid #ddd;margin:16px 0">
+        <h4 style="color:#333">¿Cómo confirmar que gestionaste una OC?</h4>
+        <ol style="font-size:13px;line-height:1.8">
+          <li>Haz clic en este link: <a href="{repo_url}">Editar gestiones.csv en GitHub</a></li>
+          <li>Haz clic en el ícono del lápiz (Edit this file)</li>
+          <li>Al final del archivo agrega una nueva línea con este formato:<br>
+              <code style="background:#f0f0f0;padding:2px 6px">{nuevas.iloc[0]["codigo_oc"]},Tu Nombre,{datetime.now().strftime("%Y-%m-%d")},gestionada</code>
+          </li>
+          <li>Haz clic en "Commit changes" y luego en "Commit changes" nuevamente</li>
+          <li>El próximo run automático marcará la alarma como GESTIONADA</li>
+        </ol>
+        <p style="color:#aaa;font-size:11px">Generado automáticamente &middot; GitHub Actions &middot; Mercado Público</p>
+      </div>
+    </body></html>
+    """
+
+    plain = (
+        f"ALARMA — {len(nuevas)} OC Prioritaria(s) Nueva(s) — {fecha_hoy}\n\n"
+        + "\n".join(
+            f"  {r['codigo_oc']} | {r['nombre_organismo']} | {r['categoria']} | cierre: {r['fecha_cierre']}"
+            for _, r in nuevas.iterrows()
+        )
+        + f"\n\nTotal activas: {len(activas)}"
+        + f"\n\nPara confirmar gestión edita: {repo_url}"
+    )
+
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(recipients)
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(plain, "plain", "utf-8"))
+    alt.attach(MIMEText(html, "html", "utf-8"))
+    msg.attach(alt)
+
+    print(f"  [ALARMAS] Enviando alerta a {recipients} …")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(EMAIL_FROM, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_FROM, recipients, msg.as_bytes())
+    print("  [ALARMAS] Alerta enviada correctamente.")
+
+
 # ── PIPELINE PRINCIPAL ────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -348,7 +673,32 @@ def main() -> None:
         "--fecha", default=None,
         help="Fecha en formato DDMMAAAA (default: hoy)",
     )
+    parser.add_argument(
+        "--resumen", action="store_true",
+        help="Solo envía digest de alarmas de los últimos 7 días (sin fetch de OC)",
+    )
     args = parser.parse_args()
+
+    # ── Modo resumen: sin fetch, solo digest de alarmas ───────────────────────
+    if args.resumen:
+        print("Modo RESUMEN — leyendo alarmas.csv y enviando digest...")
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        df_alarmas = cargar_alarmas_existentes()
+        df_alarmas = aplicar_gestiones(df_alarmas)
+        guardar_alarmas(df_alarmas)
+
+        df_activas = df_alarmas[df_alarmas["estado_alarma"] == "ACTIVA"].copy()
+
+        n_dias = 7
+        cutoff = (datetime.now() - timedelta(days=n_dias)).isoformat()
+        df_historial = df_alarmas[df_alarmas["fecha_detectada"] >= cutoff].copy() \
+            if "fecha_detectada" in df_alarmas.columns and not df_alarmas.empty \
+            else df_alarmas.copy()
+
+        print(f"  Activas: {len(df_activas)} | Historial últimos {n_dias}d: {len(df_historial)}")
+        enviar_email_resumen(df_activas, df_historial, n_dias)
+        print("Resumen completado.")
+        return
 
     fecha_extraccion = datetime.now(ZoneInfo("America/Santiago"))
     fecha_str = args.fecha or fecha_extraccion.strftime("%d%m%Y")
@@ -614,14 +964,35 @@ def main() -> None:
     print(f"  Detalle:  {len(df_detalles)} OC con detalle (acumulado)")
     print(f"  Consolidado: {len(df_consol)} filas acumuladas (+{nuevas_consol} nuevas hoy)")
 
-    # Email: todas las OC del día desde el consolidado acumulado
-    if "FechaConsulta" in df_consol.columns:
-        rows_del_dia = df_consol[
-            df_consol["FechaConsulta"] == fecha_consulta
-        ].to_dict("records")
+    # Email de OC: solo si este run detectó OC nuevas (evita spam en runs vacíos)
+    if nuevas_consol > 0:
+        if "FechaConsulta" in df_consol.columns:
+            rows_del_dia = df_consol[
+                df_consol["FechaConsulta"] == fecha_consulta
+            ].to_dict("records")
+        else:
+            rows_del_dia = df_consol.to_dict("records")
+        send_email(rows_del_dia, fecha_consulta)
     else:
-        rows_del_dia = df_consol.to_dict("records")
-    send_email(rows_del_dia, fecha_consulta)
+        print("  Sin OC nuevas en este run — email de OC omitido.")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ALARMAS: clientes prioritarios
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n[ALARMAS] Verificando clientes prioritarios...")
+    prefijos_prioritarios = cargar_clientes_prioritarios()
+    if prefijos_prioritarios:
+        df_alarmas = cargar_alarmas_existentes()
+        df_alarmas = aplicar_gestiones(df_alarmas)
+        nuevas_alarmas = detectar_nuevas_alarmas(df_consol, prefijos_prioritarios, df_alarmas)
+        if not nuevas_alarmas.empty:
+            df_alarmas = pd.concat([df_alarmas, nuevas_alarmas], ignore_index=True)
+        guardar_alarmas(df_alarmas)
+        df_activas = df_alarmas[df_alarmas["estado_alarma"] == "ACTIVA"].copy()
+        print(f"  [ALARMAS] Activas totales: {len(df_activas)} | Nuevas: {len(nuevas_alarmas)}")
+        enviar_email_alarmas(nuevas_alarmas, df_activas)
+    else:
+        print("  [ALARMAS] Sin clientes prioritarios — sin verificación.")
 
     ahora = datetime.now()
     print(f"\nPipeline completado — {ahora.strftime('%d/%m/%Y %H:%M:%S')}")
