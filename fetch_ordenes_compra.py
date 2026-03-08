@@ -85,7 +85,13 @@ EMAIL_TO = os.getenv("EMAIL_TO") or "hurtadodaniel.cl@gmail.com"
 # ── ALARMAS ───────────────────────────────────────────────────────────────────
 
 EMAIL_ALERTAS = os.getenv("EMAIL_ALERTAS") or EMAIL_FROM
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AIzaSyD_ZIHDx1Iugtl0S-Tv-Swfp0HM0TZ6gHU"
+# Las Gemini API keys empiezan con "AIza"; tokens OAuth2 empiezan con "AQ." o "ya29."
+# Si el secret tiene el valor incorrecto (token OAuth2), ignorarlo y usar el fallback.
+_raw_gemini_key = os.getenv("GEMINI_API_KEY") or ""
+GEMINI_API_KEY = _raw_gemini_key if _raw_gemini_key.startswith("AIza") else "AIzaSyD_ZIHDx1Iugtl0S-Tv-Swfp0HM0TZ6gHU"
+if _raw_gemini_key and not _raw_gemini_key.startswith("AIza"):
+    print(f"  [GEMINI] Advertencia: GEMINI_API_KEY no parece una API key válida "
+          f"(empieza con '{_raw_gemini_key[:6]}...'). Usando fallback.")
 CLIENTES_PRIORITARIOS_PATH = DATA_DIR / "clientes_prioritarios.json"
 ALARMAS_PATH = DATA_DIR / "alarmas.csv"
 GESTIONES_PATH = DATA_DIR / "gestiones.csv"
@@ -589,8 +595,11 @@ def generar_resumen_gemini(df_activas: pd.DataFrame) -> str:
             f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
         )
         body = {"contents": [{"parts": [{"text": prompt}]}]}
+        print(f"  [GEMINI] Key prefix: {GEMINI_API_KEY[:8]}... | URL endpoint: gemini-2.0-flash")
         resp = requests.post(url, json=body, timeout=30)
-        resp.raise_for_status()
+        if not resp.ok:
+            print(f"  [GEMINI] HTTP {resp.status_code}: {resp.text[:500]}")
+            resp.raise_for_status()
         data = resp.json()
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
