@@ -487,7 +487,7 @@ def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n
     else:
         subject = f"⚠️ Resumen Alarmas · {len(df_activas)} activa(s) · {ahora}"
 
-    cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria",
+    cols_show = ["codigo_oc", "nombre_organismo", "monto", "fecha_envio", "categoria",
                  "fecha_cierre", "estado_alarma", "fecha_detectada", "ejecutivo_gestion"]
 
     def _tabla(df, highlight_col="estado_alarma"):
