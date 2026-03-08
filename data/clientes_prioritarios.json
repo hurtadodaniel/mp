@@ -1,0 +1,9 @@
+{
+  "clientes": [
+    {
+      "prefijo": "EJEMPLO",
+      "nombre": "Cliente de Ejemplo",
+      "descripcion": "Reemplazar con el prefijo real (numero antes del primer guion en el codigo de OC, ej: 2085 en 2085-172-CM26)"
+    }
+  ]
+}
