@@ -473,6 +473,107 @@ def guardar_alarmas(df_alarmas: pd.DataFrame) -> None:
     print(f"  [ALARMAS] alarmas.csv guardado: {len(df_alarmas)} registros totales.")
 
 
+def enviar_email_resumen(df_activas: pd.DataFrame, df_historial: pd.DataFrame, n_dias: int = 7) -> None:
+    """Envía digest con alarmas activas + historial de los últimos n_dias días."""
+    if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_ALERTAS]):
+        print("  [RESUMEN] Email no configurado — saltando.")
+        return
+
+    recipients = [r.strip() for r in EMAIL_ALERTAS.split(",") if r.strip()]
+    ahora = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d %H:%M")
+    subject = f"📋 Resumen Alarmas · {len(df_activas)} activa(s) · {ahora}"
+
+    cols_show = ["codigo_oc", "nombre_organismo", "monto", "categoria",
+                 "fecha_cierre", "estado_alarma", "fecha_detectada", "ejecutivo_gestion"]
+
+    def _tabla(df, highlight_col="estado_alarma"):
+        if df.empty:
+            return "<p style='color:#888;font-style:italic'>Sin registros.</p>"
+        header = "".join(
+            f"<th style='padding:6px 10px;text-align:left;white-space:nowrap'>{c}</th>"
+            for c in cols_show if c in df.columns
+        )
+        rows_html = ""
+        for i, (_, row) in enumerate(df.iterrows()):
+            estado = str(row.get("estado_alarma", ""))
+            if estado == "ACTIVA":
+                bg = "#fff3cd" if i % 2 == 0 else "#fff8e7"
+            elif estado == "GESTIONADA":
+                bg = "#d4edda" if i % 2 == 0 else "#e8f5e9"
+            else:
+                bg = "#f9f9f9" if i % 2 == 0 else "#ffffff"
+            cells = "".join(
+                f"<td style='padding:5px 10px'>{row.get(c, '')}</td>"
+                for c in cols_show if c in df.columns
+            )
+            rows_html += f"<tr style='background:{bg}'>{cells}</tr>"
+        return f"""
+        <table border="0" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse;font-family:monospace;font-size:12px;width:100%;margin-bottom:16px">
+          <thead style="background:#1a56db;color:white"><tr>{header}</tr></thead>
+          <tbody>{rows_html}</tbody>
+        </table>"""
+
+    n_gestionadas = len(df_historial[df_historial["estado_alarma"] == "GESTIONADA"]) if not df_historial.empty else 0
+    repo_url = "https://github.com/hurtadodaniel/mp/edit/master/data/gestiones.csv"
+
+    html = f"""
+    <html><body style="font-family:Arial,sans-serif;color:#222;max-width:960px;margin:auto">
+      <div style="background:#1a56db;color:white;padding:16px 24px;border-radius:6px 6px 0 0">
+        <h2 style="margin:0">📋 Resumen de Alarmas — Mercado Público</h2>
+        <p style="margin:4px 0 0">{ahora} · Últimos {n_dias} días</p>
+      </div>
+      <div style="background:#f8faff;border:2px solid #1a56db;padding:16px 24px">
+
+        <h3 style="color:#c0392b;margin-top:0">
+          🔴 Alarmas ACTIVAS ({len(df_activas)})
+        </h3>
+        {_tabla(df_activas)}
+
+        <h3 style="color:#27ae60">
+          ✅ Gestionadas en los últimos {n_dias} días ({n_gestionadas})
+        </h3>
+        {_tabla(df_historial[df_historial["estado_alarma"] == "GESTIONADA"]) if not df_historial.empty else "<p style='color:#888'>Sin registros.</p>"}
+
+        <h3 style="color:#555">
+          📅 Historial completo últimos {n_dias} días ({len(df_historial)})
+        </h3>
+        {_tabla(df_historial)}
+
+        <hr style="border:none;border-top:1px solid #ddd;margin:16px 0">
+        <p style="font-size:12px;color:#555">
+          Para marcar una OC como gestionada:
+          <a href="{repo_url}">Editar gestiones.csv en GitHub</a>
+        </p>
+        <p style="color:#aaa;font-size:11px">Generado automáticamente · GitHub Actions · Mercado Público</p>
+      </div>
+    </body></html>
+    """
+
+    plain = (
+        f"RESUMEN ALARMAS — {ahora}\n"
+        f"Activas: {len(df_activas)} | Gestionadas últimos {n_dias}d: {n_gestionadas}\n\n"
+        + "\n".join(
+            f"  [{r['estado_alarma']}] {r['codigo_oc']} | {r['nombre_organismo']} | {r.get('categoria','')} | cierre: {r.get('fecha_cierre','')}"
+            for _, r in df_activas.iterrows()
+        )
+        + f"\n\nGestionar en: {repo_url}"
+    )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(recipients)
+    msg.attach(MIMEText(plain, "plain", "utf-8"))
+    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    print(f"  [RESUMEN] Enviando digest a {recipients} …")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(EMAIL_FROM, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_FROM, recipients, msg.as_bytes())
+    print("  [RESUMEN] Digest enviado correctamente.")
+
+
 def enviar_email_alarmas(nuevas: pd.DataFrame, activas: pd.DataFrame) -> None:
     """Envía email de alerta con nuevas OC prioritarias y resumen de activas."""
     if nuevas.empty:
@@ -569,7 +670,32 @@ def main() -> None:
         "--fecha", default=None,
         help="Fecha en formato DDMMAAAA (default: hoy)",
     )
+    parser.add_argument(
+        "--resumen", action="store_true",
+        help="Solo envía digest de alarmas de los últimos 7 días (sin fetch de OC)",
+    )
     args = parser.parse_args()
+
+    # ── Modo resumen: sin fetch, solo digest de alarmas ───────────────────────
+    if args.resumen:
+        print("Modo RESUMEN — leyendo alarmas.csv y enviando digest...")
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        df_alarmas = cargar_alarmas_existentes()
+        df_alarmas = aplicar_gestiones(df_alarmas)
+        guardar_alarmas(df_alarmas)
+
+        df_activas = df_alarmas[df_alarmas["estado_alarma"] == "ACTIVA"].copy()
+
+        n_dias = 7
+        cutoff = (datetime.now() - timedelta(days=n_dias)).isoformat()
+        df_historial = df_alarmas[df_alarmas["fecha_detectada"] >= cutoff].copy() \
+            if "fecha_detectada" in df_alarmas.columns and not df_alarmas.empty \
+            else df_alarmas.copy()
+
+        print(f"  Activas: {len(df_activas)} | Historial últimos {n_dias}d: {len(df_historial)}")
+        enviar_email_resumen(df_activas, df_historial, n_dias)
+        print("Resumen completado.")
+        return
 
     fecha_extraccion = datetime.now(ZoneInfo("America/Santiago"))
     fecha_str = args.fecha or fecha_extraccion.strftime("%d%m%Y")
@@ -835,14 +961,17 @@ def main() -> None:
     print(f"  Detalle:  {len(df_detalles)} OC con detalle (acumulado)")
     print(f"  Consolidado: {len(df_consol)} filas acumuladas (+{nuevas_consol} nuevas hoy)")
 
-    # Email: todas las OC del día desde el consolidado acumulado
-    if "FechaConsulta" in df_consol.columns:
-        rows_del_dia = df_consol[
-            df_consol["FechaConsulta"] == fecha_consulta
-        ].to_dict("records")
+    # Email de OC: solo si este run detectó OC nuevas (evita spam en runs vacíos)
+    if nuevas_consol > 0:
+        if "FechaConsulta" in df_consol.columns:
+            rows_del_dia = df_consol[
+                df_consol["FechaConsulta"] == fecha_consulta
+            ].to_dict("records")
+        else:
+            rows_del_dia = df_consol.to_dict("records")
+        send_email(rows_del_dia, fecha_consulta)
     else:
-        rows_del_dia = df_consol.to_dict("records")
-    send_email(rows_del_dia, fecha_consulta)
+        print("  Sin OC nuevas en este run — email de OC omitido.")
 
     # ══════════════════════════════════════════════════════════════════════════
     # ALARMAS: clientes prioritarios
